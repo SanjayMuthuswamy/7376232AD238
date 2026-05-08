@@ -30,3 +30,7 @@ Right now users and notifications are stored in memory, so data resets when the 
 - `vehicle_maintenance_scheduler/`
 - `notification_system_design.md`
 - `notification_app_be/`
+
+## Output
+
+![Output Screenshot](./output/Screenshot%202026-05-08%20153053.png)
