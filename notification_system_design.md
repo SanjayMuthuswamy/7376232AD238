@@ -2,114 +2,74 @@
 
 ## Stage 1
 
-### Core Actions
-1. **Fetch Notifications**: Retrieve a paginated list of notifications for the logged-in user.
-2. **Get Unread Count**: Get the total number of unread notifications for the user badge.
-3. **Mark as Read**: Mark a specific notification as read.
-4. **Mark All as Read**: Mark all unread notifications for the user as read.
-5. **Create Notification**: (Internal/System action) Create a new notification for a user.
+For the core API, I think we need a few main endpoints to handle notifications properly when a user logs in. Here are the core actions we need to support:
+- Fetching a list of notifications (paginated)
+- Getting just the unread count (for the little badge in the UI)
+- Marking a single notification as read
+- Marking everything as read in one go
+- Creating a notification internally
 
 ### REST API Endpoints
 
-#### 1. Fetch Notifications
-- **Endpoint**: `GET /api/v1/notifications`
-- **Headers**:
-  ```json
-  {
-    "Authorization": "Bearer <jwt_token>"
-  }
-  ```
-- **Query Parameters**:
-  - `page` (integer, default: 1)
-  - `limit` (integer, default: 20)
-  - `unread_only` (boolean, default: false)
-- **Response (200 OK)**:
-  ```json
-  {
-    "data": [
-      {
-        "id": "123e4567-e89b-12d3-a456-426614174000",
-        "title": "Assignment Graded",
-        "message": "Your math assignment has been graded.",
-        "type": "alert",
-        "is_read": false,
-        "action_url": "/assignments/123",
-        "created_at": "2026-05-08T10:00:00Z"
-      }
-    ],
-    "meta": {
-      "total": 45,
-      "page": 1,
-      "limit": 20,
-      "total_pages": 3
+**1. Fetch Notifications**
+`GET /api/v1/notifications`
+
+Headers:
+```json
+{ "Authorization": "Bearer <jwt_token>" }
+```
+
+Query Params: `page` (default 1), `limit` (default 20), `unread_only` (default false)
+
+Response:
+```json
+{
+  "data": [
+    {
+      "id": "123e4567-e89b-12d3-a456-426614174000",
+      "title": "Assignment Graded",
+      "message": "Your math assignment has been graded.",
+      "type": "alert",
+      "is_read": false,
+      "action_url": "/assignments/123",
+      "created_at": "2026-05-08T10:00:00Z"
     }
+  ],
+  "meta": {
+    "total": 45,
+    "page": 1,
+    "limit": 20,
+    "total_pages": 3
   }
-  ```
+}
+```
 
-#### 2. Get Unread Count
-- **Endpoint**: `GET /api/v1/notifications/unread-count`
-- **Headers**:
-  ```json
-  {
-    "Authorization": "Bearer <jwt_token>"
-  }
-  ```
-- **Response (200 OK)**:
-  ```json
-  {
-    "unread_count": 5
-  }
-  ```
+**2. Get Unread Count**
+`GET /api/v1/notifications/unread-count`
+Response:
+```json
+{ "unread_count": 5 }
+```
 
-#### 3. Mark a Notification as Read
-- **Endpoint**: `PATCH /api/v1/notifications/{notification_id}/read`
-- **Headers**:
-  ```json
-  {
-    "Authorization": "Bearer <jwt_token>",
-    "Content-Type": "application/json"
-  }
-  ```
-- **Response (200 OK)**:
-  ```json
-  {
-    "success": true,
-    "message": "Notification marked as read."
-  }
-  ```
+**3. Mark as Read**
+`PATCH /api/v1/notifications/{notification_id}/read`
+Response:
+```json
+{ "success": true, "message": "Notification marked as read." }
+```
 
-#### 4. Mark All as Read
-- **Endpoint**: `PATCH /api/v1/notifications/read-all`
-- **Headers**:
-  ```json
-  {
-    "Authorization": "Bearer <jwt_token>",
-    "Content-Type": "application/json"
-  }
-  ```
-- **Response (200 OK)**:
-  ```json
-  {
-    "success": true,
-    "message": "All notifications marked as read."
-  }
-  ```
+**4. Mark All as Read**
+`PATCH /api/v1/notifications/read-all`
 
-### Real-Time Notifications Mechanism
-To push notifications to the front-end in real-time, **Server-Sent Events (SSE)** or **WebSockets** can be used. 
-Since notifications are a one-way stream from the server to the client, **Server-Sent Events (SSE)** is an excellent lightweight choice. Alternatively, if the platform already uses **WebSockets**, the same connection can be reused.
-- The client connects to `GET /api/v1/notifications/stream`.
-- When the backend generates a new notification, it publishes the event to a message broker (like Redis Pub/Sub).
-- The API server listens to the broker and pushes the JSON payload of the new notification to the specific connected client.
-
+### Real-Time Updates
+Since notifications mostly just flow from the server to the client, Server-Sent Events (SSE) is probably the best and lightest option here. We don't really need a full 2-way WebSocket connection unless we're already using something like Socket.io for a chat feature. If we just connect the client to a `GET /api/v1/notifications/stream` endpoint, the server can push JSON down whenever a new event comes through Redis Pub/Sub.
 
 ## Stage 2
 
-### Persistent Storage Choice
-**PostgreSQL** (Relational).
-For a notification system where we occasionally need to store unstructured payload data but still maintain a strong relationship with the user, **PostgreSQL** is a solid choice because it supports robust indexing and JSONB data types. It handles large datasets efficiently when properly indexed.
+### Database Choice
+I'd go with **PostgreSQL**. Since we still have a strong relationship to the `studentID` but might occasionally want to toss random JSON payloads in there, Postgres gives us the best of both worlds (relational guarantees + JSONB columns). 
 
-### Database Schema (PostgreSQL)
+### Schema
 ```sql
 CREATE TABLE notifications (
     id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
@@ -122,25 +82,26 @@ CREATE TABLE notifications (
     createdAt TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
 );
 
--- Indexes
+-- We definitely need these indexes so reads don't crawl
 CREATE INDEX idx_notifications_studentID ON notifications(studentID);
 CREATE INDEX idx_notifications_student_isRead ON notifications(studentID, isRead);
 ```
 
-### Potential Problems with Increasing Data Volume
-1. **Slow Reads**: As the table reaches millions of rows, filtering by `studentID` and `isRead` can become slow.
-2. **Storage Costs & Bloat**: Retaining years of notifications takes up massive disk space and RAM for indexes.
-3. **High Write Throughput Bottlenecks**: Creating notifications for thousands of users simultaneously can lock the database.
+### Scaling Challenges
+As we hit millions of rows, a few things will break:
+1. Searching by `studentID` and `isRead` will slow down if our indexes get too big to fit in memory.
+2. Storing 5 years of notifications is a waste of money and disk space.
+3. If we send a mass announcement to 100k students at once, we might lock up the DB with writes.
 
-### Solutions to Volume Problems
-1. **Data Partitioning**: Partition the `notifications` table by date (e.g., monthly partitions) so queries for recent notifications only scan a smaller subset of data.
-2. **Archiving/TTL**: Move notifications older than 30 or 90 days to a cold storage database or delete them.
-3. **Caching**: Cache the `unread_count` in an in-memory store like **Redis**. Instead of querying the DB every time the user loads a page, increment/decrement the Redis counter.
-4. **Batch Processing**: When generating bulk notifications, push them to a queue (Kafka/RabbitMQ) and let workers insert them into the DB in batches.
+To fix this:
+- **Partitioning**: Split the table by month so we're only querying recent stuff.
+- **Archiving**: Delete or move notifications older than 90 days.
+- **Caching**: Stick the unread count in Redis so we aren't running `COUNT(*)` on page loads.
+- **Queues**: Use RabbitMQ or Kafka to insert notifications in background batches.
 
-### Queries Based on Stage 1 APIs
+### Queries
 
-**1. Fetch Notifications:**
+Fetch notifications:
 ```sql
 SELECT id, title, message, type, isRead, action_url, createdAt 
 FROM notifications 
@@ -149,47 +110,42 @@ ORDER BY createdAt DESC
 LIMIT 20 OFFSET 0;
 ```
 
-**2. Get Unread Count:**
+Unread Count:
 ```sql
 SELECT COUNT(*) FROM notifications WHERE studentID = 1042 AND isRead = FALSE;
 ```
 
-**3. Mark a Notification as Read:**
+Mark as read:
 ```sql
 UPDATE notifications SET isRead = TRUE WHERE id = 'uuid-here' AND studentID = 1042;
 ```
 
-**4. Mark All as Read:**
+Mark all as read:
 ```sql
 UPDATE notifications SET isRead = TRUE WHERE studentID = 1042 AND isRead = FALSE;
 ```
 
 ## Stage 3
 
-### Potential Reasons for Slow Query Performance
-The query provided is:
-```sql
-SELECT * FROM notifications
-WHERE studentID = 1042 AND isRead = false
-ORDER BY createdAt DESC;
-```
+### Why the query is slow
+Looking at `SELECT * FROM notifications WHERE studentID = 1042 AND isRead = false ORDER BY createdAt DESC;`
 
-1. **Missing Indexes**: If there is no index covering `studentID` and `isRead`, the database must perform a **Full Table Scan** across all 5,000,000 rows to find the matching records.
-2. **Sorting Overhead (`ORDER BY createdAt DESC`)**: Even with a basic index on `studentID`, the database still has to fetch the results and then sort them in memory (filesort), which is expensive for a large volume of rows.
-3. **Fetching Unnecessary Columns (`SELECT *`)**: Selecting all columns increases the amount of data read from disk, taking up more memory and network bandwidth.
+1. **No index**: If there's no index that covers both `studentID` and `isRead`, Postgres has to do a full table scan across all 5 million rows just to find the records.
+2. **Memory sorting**: Even if it finds the rows, `ORDER BY createdAt DESC` forces the DB to sort the results in memory before returning them, which is super slow.
+3. **`SELECT *`**: Pulling every single column off the disk takes up more memory and network bandwidth than necessary.
 
-### Optimizations
+### How to fix it
 
-#### 1. Create a Composite Index (Most Impactful)
-Create a composite index on the exact columns used in the `WHERE` and `ORDER BY` clauses.
+**1. Add a composite index (This is the most important fix)**
+We need an index that perfectly matches the `WHERE` and `ORDER BY` clauses.
 ```sql
 CREATE INDEX idx_notifications_student_read_created 
 ON notifications (studentID, isRead, createdAt DESC);
 ```
-*Why this works*: The database can instantly locate the section of the index for `studentID = 1042` and `isRead = false`. Because the index also includes `createdAt DESC`, the results are already sorted within the index, completely eliminating the expensive memory sort operation.
+With this, the DB instantly jumps to the right student, filters out the read ones, and the data is *already sorted* inside the index, so it skips the memory sort entirely.
 
-#### 2. Optimize the Query
-Avoid `SELECT *`. Only select the specific columns needed by the front-end to render the notifications. Add pagination (`LIMIT`) to avoid fetching an unbounded number of rows.
+**2. Optimize the query**
+Stop doing `SELECT *` and add a limit so we don't accidentally fetch 10,000 rows.
 ```sql
 SELECT id, title, message, type, createdAt 
 FROM notifications
@@ -198,8 +154,8 @@ ORDER BY createdAt DESC
 LIMIT 20;
 ```
 
-#### 3. Caching
-Store the unread count in **Redis** (e.g. key `unread_count:1042`), increment/decrement as events occur, instead of calculating `COUNT(*)` continuously.
+**3. Redis caching**
+Honestly, we shouldn't be running this query just to show the unread badge. We should keep an `unread_count:1042` key in Redis, increment it when a new notification comes in, and decrement it when they read it.
 
 
 ## Stage 4
