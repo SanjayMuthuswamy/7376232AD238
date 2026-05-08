@@ -127,90 +127,92 @@ UPDATE notifications SET isRead = TRUE WHERE studentID = 1042 AND isRead = FALSE
 
 ## Stage 3
 
-### Why the query is slow
-Looking at `SELECT * FROM notifications WHERE studentID = 1042 AND isRead = false ORDER BY createdAt DESC;`
+### 1. Is this query accurate and why is it slow?
+Yes, the query is perfectly accurate for fetching unread notifications for a specific student. However, it's very slow because of three main issues:
+- **No Index**: Without an index on `studentID` and `isRead`, Postgres has to do a **Full Table Scan** (reading all 5,000,000 rows) to find matching records.
+- **In-Memory Sort**: The `ORDER BY createdAt DESC` forces the database to sort the results in memory (filesort) after finding them, which is slow and memory-intensive.
+- **`SELECT *` Overhead**: Pulling every column off the disk takes up more bandwidth and RAM than just selecting the specific columns needed.
 
-1. **No index**: If there's no index that covers both `studentID` and `isRead`, Postgres has to do a full table scan across all 5 million rows just to find the records.
-2. **Memory sorting**: Even if it finds the rows, `ORDER BY createdAt DESC` forces the DB to sort the results in memory before returning them, which is super slow.
-3. **`SELECT *`**: Pulling every single column off the disk takes up more memory and network bandwidth than necessary.
-
-### How to fix it
-
-**1. Add a composite index (This is the most important fix)**
-We need an index that perfectly matches the `WHERE` and `ORDER BY` clauses.
+### 2. What would you change & computation cost?
+I would add a **composite index** specifically tailored to the `WHERE` and `ORDER BY` clauses:
 ```sql
 CREATE INDEX idx_notifications_student_read_created 
 ON notifications (studentID, isRead, createdAt DESC);
 ```
-With this, the DB instantly jumps to the right student, filters out the read ones, and the data is *already sorted* inside the index, so it skips the memory sort entirely.
+I would also stop doing `SELECT *` and add pagination (`LIMIT 20`). 
+**Computation Cost**: With the index, the database can do an **Index Scan** or **Index-Only Scan**. The cost drops from $O(N)$ (scanning 5 million rows) to $O(\log N)$ (traversing the B-Tree index). Since the index is already sorted by `createdAt DESC`, the sorting cost becomes $O(1)$. 
 
-**2. Optimize the query**
-Stop doing `SELECT *` and add a limit so we don't accidentally fetch 10,000 rows.
+### 3. Adding indexes on every column?
+**Terrible advice.** While indexes speed up read operations (`SELECT`), they drastically slow down write operations (`INSERT`, `UPDATE`, `DELETE`) because every single index must be updated synchronously whenever a row changes. Since notifications are very write-heavy, indexing every column would cripple the database's write performance and waste gigabytes of disk space and RAM.
+
+### 4. Query for Placement Notifications in the last 7 days
 ```sql
-SELECT id, title, message, type, createdAt 
-FROM notifications
-WHERE studentID = 1042 AND isRead = false
-ORDER BY createdAt DESC
-LIMIT 20;
+SELECT DISTINCT studentID 
+FROM notifications 
+WHERE notificationType = 'Placement' 
+AND createdAt >= NOW() - INTERVAL '7 days';
 ```
-
-**3. Redis caching**
-Honestly, we shouldn't be running this query just to show the unread badge. We should keep an `unread_count:1042` key in Redis, increment it when a new notification comes in, and decrement it when they read it.
 
 
 ## Stage 4
 
-Fetching notifications on every page load is simple, but it wastes database and network resources. A better solution is a mix of caching, pagination, and real-time updates.
+If we're querying the DB on *every single page load*, we are going to crush our database under the weight of read requests. Here are a few ways to fix this, along with their pros and cons.
 
-### Options
+### 1. Redis Caching (For the Unread Badge)
+The most common query is just getting the unread count to render the red bubble in the navbar.
+- **Solution**: Instead of `SELECT COUNT(*)`, keep a simple key-value in Redis (e.g., `unread_count:1042`). Increment it when a notification is created, decrement it when read.
+- **Tradeoffs**: It's blazing fast and takes massive load off the main DB. The downside is potential cache-drift (Redis gets out of sync with Postgres), so you need a background job to occasionally heal the cache.
 
-- Pagination: fetch 20 or 50 notifications at a time instead of all records.
-- Unread count cache: store only the unread count in Redis or a similar cache.
-- Client polling: easy to implement, but can create extra load if many users are online.
-- WebSocket or SSE: better for real-time updates, but needs connection handling.
-- Database indexes: still required because caching does not solve every query.
+### 2. Client-Side State & LocalStorage
+- **Solution**: Once the frontend fetches the notifications on the initial login, store them in a state manager (like Redux/Zustand) or `localStorage`. On subsequent page navigation, just read from memory instead of hitting the network.
+- **Tradeoffs**: Super fast navigation and zero server cost. The tradeoff is that the client might look at stale data if they leave the tab open for hours without refreshing (unless paired with SSE).
 
-My approach would be:
+### 3. Server-Sent Events (SSE) or WebSockets
+- **Solution**: Stop making the client ask the server "do I have notifications?" on every page load. Instead, keep a single SSE connection open. The server pushes down new notifications only when they actually happen.
+- **Tradeoffs**: Greatly reduces HTTP request overhead. However, maintaining thousands of open socket connections requires more RAM on the server and a load balancer configured for long-lived connections.
 
-1. Fetch latest notifications with pagination.
-2. Cache unread count per student.
-3. Use WebSocket or SSE only for new notification events.
-4. Fall back to REST API if the real-time connection fails.
-
-This keeps the app reliable without making the first version too complicated.
+### My Recommendation
+I would combine **Redis Caching** for the unread count and **SSE** for real-time updates. When the user logs in, we fetch the first paginated page of notifications once. From then on, we rely on SSE to push new items to the UI. We never fetch on page navigation.
 
 ## Stage 5
 
-The pseudocode sends email, saves to DB, and pushes to app inside one loop. The main issue is that one failed email can slow or break the whole process. If 50,000 students are notified at once, doing everything synchronously is risky.
+### What's wrong with this pseudocode?
+1. **Synchronous Blocking**: Running an HTTP request (`send_email`) and a DB insert inside a `for` loop for 50,000 iterations will take forever. The HR user's browser will likely timeout waiting for the API to respond.
+2. **N+1 Database Problem**: Doing 50,000 individual `INSERT` queries is incredibly inefficient and will severely bog down the database.
+3. **No Error Handling or Retries**: If `send_email` throws a network timeout, the entire loop crashes. 
 
-Problems:
+### What happens when it fails midway?
+If the loop crashes at student #25,000, we have a nightmare scenario: half the students got the email, half didn't, and we have no safe way to resume. If we re-run the script, the first 25,000 students will get spammed with a duplicate email.
 
-- Sending email one by one is slow.
-- DB inserts one by one are expensive.
-- A failure midway can leave some students notified and some not.
-- There is no retry system.
-- The user has to wait for the whole process.
+### Should DB saving and email sending happen together?
+**Absolutely not.** They should be completely decoupled. 
+Database inserts are fast and reliable. Email APIs (like SendGrid or SES) are slow and prone to rate-limits or network blips. If the email API goes down, it shouldn't prevent us from saving the notification to the database. We should bulk-insert the data into the DB first, then offload the email sending to a background worker queue.
 
-Better design:
+### Redesigning for Speed & Reliability
+We need to use **Bulk Inserts** for the database and **Message Queues** (like Celery, RabbitMQ, or AWS SQS) for the emails.
 
-```txt
-1. Create a notification campaign.
-2. Insert notification rows in batches.
-3. Push email jobs to a queue.
-4. Push in-app notification events separately.
-5. Retry failed email jobs.
-6. Track campaign progress.
+**Revised Pseudocode:**
+```python
+function notify_all(student_ids: array, message: string):
+    # 1. Bulk insert all 50,000 records into the DB in one massive query (Super fast)
+    bulk_save_to_db(student_ids, message)
+    
+    # 2. Push all 50k jobs to a background queue (Returns instantly to the HR user)
+    for student_id in student_ids:
+        message_queue.push(task="send_email_and_push", student_id=student_id, message=message)
+        
+    return "Notifications are being sent in the background!"
+
+# --- Background Worker Process ---
+function process_queue_task(task):
+    try:
+        # These now run concurrently across multiple worker servers
+        send_email(task.student_id, task.message)
+        push_to_app(task.student_id, task.message)
+    except EmailAPIError:
+        # If the email fails, the queue automatically retries it with exponential backoff
+        message_queue.retry_task(task, delay="5_minutes")
 ```
-
-Saving to DB and sending email should not fully depend on each other. The DB insert should happen first so the system has a record of what should be sent. Email sending can happen through a background worker with retries.
-
-Useful logging points:
-
-- campaign created
-- batch insert completed
-- email job failed
-- retry started
-- campaign completed
 
 ## Stage 6
 
