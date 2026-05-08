@@ -1,9 +1,8 @@
 from pydantic import BaseModel, field_validator
 from datetime import datetime
-from typing import Optional
+from typing import Optional, List
 
 class NotificationCreate(BaseModel):
-    """Schema for creating a notification - Stage 1"""
     student_id: int
     type: str
     title: str
@@ -17,8 +16,13 @@ class NotificationCreate(BaseModel):
             raise ValueError("This field is required")
         return value
 
+class BulkNotificationCreate(BaseModel):
+    student_ids: List[int]
+    type: str
+    title: str
+    message: str
+
 class NotificationResponse(BaseModel):
-    """Schema for notification response - Stage 1"""
     id: int
     student_id: int
     type: str
@@ -31,6 +35,5 @@ class NotificationResponse(BaseModel):
         from_attributes = True
 
 class UnreadCountResponse(BaseModel):
-    """Schema for unread count response - Stage 1"""
     student_id: int
     unread_count: int

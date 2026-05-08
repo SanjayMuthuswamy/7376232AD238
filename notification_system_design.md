@@ -82,7 +82,6 @@ CREATE TABLE notifications (
     createdAt TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
 );
 
--- We definitely need these indexes so reads don't crawl
 CREATE INDEX idx_notifications_studentID ON notifications(studentID);
 CREATE INDEX idx_notifications_student_isRead ON notifications(studentID, isRead);
 ```
@@ -194,23 +193,18 @@ We need to use **Bulk Inserts** for the database and **Message Queues** (like Ce
 **Revised Pseudocode:**
 ```python
 function notify_all(student_ids: array, message: string):
-    # 1. Bulk insert all 50,000 records into the DB in one massive query (Super fast)
     bulk_save_to_db(student_ids, message)
     
-    # 2. Push all 50k jobs to a background queue (Returns instantly to the HR user)
     for student_id in student_ids:
         message_queue.push(task="send_email_and_push", student_id=student_id, message=message)
         
     return "Notifications are being sent in the background!"
 
-# --- Background Worker Process ---
 function process_queue_task(task):
     try:
-        # These now run concurrently across multiple worker servers
         send_email(task.student_id, task.message)
         push_to_app(task.student_id, task.message)
     except EmailAPIError:
-        # If the email fails, the queue automatically retries it with exponential backoff
         message_queue.retry_task(task, delay="5_minutes")
 ```
 
