@@ -56,6 +56,31 @@ WHERE id = $1;
 SELECT COUNT(*) FROM notifications 
 WHERE student_id = $1 AND is_read = false;
 ```
+
+## Stage 3
+
+**Query Optimization & Indexing**
+
+The query becomes slow with millions of rows because it scans all records for one student.
+
+**Composite Index Added:**
+
+```sql
+CREATE INDEX idx_notifications_student_read_created
+ON notifications (student_id, is_read, created_at DESC);
+```
+
+This index helps the database:
+- Find records for one student quickly
+- Filter unread (is_read = false) directly
+- Return sorted by created_at DESC without extra sorting
+
+**Query to find placement notifications:**
+
+```sql
+SELECT DISTINCT student_id FROM notifications
+WHERE type = 'Placement' AND created_at > NOW() - INTERVAL '7 days';
+```
 FROM notifications
 WHERE notification_type = 'Placement';
 ```
