@@ -2,102 +2,20 @@
 
 ## Stage 1
 
-The notification platform should expose simple REST APIs for creating, reading, and updating notifications. I would keep the endpoints predictable so the frontend can use them without extra mapping logic.
-
-### Main APIs
+REST API design with 6 endpoints for managing notifications.
 
 | Method | Endpoint | Purpose |
 | --- | --- | --- |
-| POST | `/notifications` | create a new notification |
-| GET | `/notifications` | list notifications for the logged-in user |
-| GET | `/notifications/{id}` | get one notification |
-| PATCH | `/notifications/{id}/read` | mark one notification as read |
-| PATCH | `/notifications/read-all` | mark all notifications as read |
-| GET | `/notifications/unread-count` | show unread count in the UI |
+| POST | `/notifications` | Create notification |
+| GET | `/notifications` | List notifications |
+| GET | `/notifications/{id}` | Get one notification |
+| PATCH | `/notifications/{id}/read` | Mark as read |
+| PATCH | `/notifications/read-all` | Mark all as read |
+| GET | `/notifications/unread-count` | Get unread count |
 
-### Create Notification Request
-
-```json
-{
-  "userId": 1042,
-  "notificationType": "Placement",
-  "title": "Placement Drive",
-  "message": "A new placement drive has been posted",
-  "priority": 10
-}
-```
-
-### Notification Response
-
-```json
-{
-  "id": "noti_101",
-  "userId": 1042,
-  "notificationType": "Placement",
-  "title": "Placement Drive",
-  "message": "A new placement drive has been posted",
-  "priority": 10,
-  "isRead": false,
-  "createdAt": "2026-05-08T10:30:00Z"
-}
-```
-
-For real-time updates, I would use WebSocket or Server-Sent Events. The frontend can still call the REST APIs after refresh, so real-time delivery is an extra layer and not the only source of truth.
+Real-time updates use WebSocket or Server-Sent Events.
 
 ## Stage 2
-
-A relational database is a good starting point because the data has clear relationships: users have many notifications, and every notification belongs to one user.
-
-### Suggested Tables
-
-```sql
-CREATE TABLE students (
-    id BIGINT PRIMARY KEY,
-    name VARCHAR(100) NOT NULL,
-    email VARCHAR(150) UNIQUE NOT NULL
-);
-
-CREATE TABLE notifications (
-    id BIGSERIAL PRIMARY KEY,
-    student_id BIGINT NOT NULL REFERENCES students(id),
-    notification_type VARCHAR(30) NOT NULL,
-    title VARCHAR(150) NOT NULL,
-    message TEXT NOT NULL,
-    priority INT DEFAULT 0,
-    is_read BOOLEAN DEFAULT false,
-    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-);
-```
-
-As data grows, the main problems will be slow unread notification queries, large table size, and too many writes during bulk notification events. To handle this, indexes should be added early, and old notifications can be archived later if they are no longer needed in the main app.
-
-## Stage 3
-
-The given query is:
-
-```sql
-SELECT * FROM notifications
-WHERE studentID = 1042 AND isRead = false
-ORDER BY createdAt DESC;
-```
-
-The query is logically fine if the column names are correct, but it will become slow when the table has millions of rows because the database may scan many records for one student.
-
-I would add a composite index:
-
-```sql
-CREATE INDEX idx_notifications_student_read_created
-ON notifications (student_id, is_read, created_at DESC);
-```
-
-This helps because the database can directly find unread notifications for one student and already read them in newest-first order.
-
-Adding indexes on every column is not a good idea. Indexes make reads faster, but they also slow down inserts and updates because every index has to be maintained. They also take extra storage.
-
-Query to find students who got placement notifications:
-
-```sql
-SELECT DISTINCT student_id
 FROM notifications
 WHERE notification_type = 'Placement';
 ```
@@ -169,7 +87,7 @@ For the priority inbox, I would rank notifications using priority, notification 
 
 Example score:
 
-```txt
+```txtdid 
 score = priority + typeWeight + recencyBonus
 ```
 
