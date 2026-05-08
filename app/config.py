@@ -9,5 +9,5 @@ def get_bool(key, default=False):
     return value.strip().lower() in ["1", "true", "yes", "on"]
 
 
-PROJECT_NAME = os.getenv("APP_NAME", "Affordmed API")
+PROJECT_NAME = os.getenv("APP_NAME", "Notification Backend")
 DEBUG = get_bool("APP_DEBUG")

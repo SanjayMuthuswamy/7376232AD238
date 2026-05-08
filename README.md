@@ -1,6 +1,6 @@
-# Affordmed API
+# Notification Backend
 
-Small FastAPI project for trying out basic user APIs.
+Small FastAPI backend project for the backend track submission. It has a simple user API, a notification API, and a reusable logging middleware function.
 
 ## Run locally
 
@@ -17,5 +17,16 @@ The app starts on `http://127.0.0.1:8000`.
 - `GET /users` - list users
 - `GET /users/{user_id}` - get one user
 - `POST /users` - add a user
+- `GET /notifications` - list notifications
+- `GET /notifications/{notification_id}` - get one notification
+- `POST /notifications` - create a notification
+- `GET /vehicle-scheduling` - fetch depot and vehicle data, then calculate the best maintenance schedule
 
-Right now users are stored in memory, so data resets when the server restarts.
+Right now users and notifications are stored in memory, so data resets when the server restarts.
+
+## Backend track files
+
+- `logging_middleware/`
+- `vehicle_maintenance_scheduler/`
+- `notification_system_design.md`
+- `notification_app_be/`

@@ -1,33 +1,36 @@
 from pydantic import BaseModel, field_validator
-
+from datetime import datetime
+from typing import Optional
 
 class NotificationCreate(BaseModel):
-    user_id: int
+    """Schema for creating a notification - Stage 1"""
+    student_id: int
+    type: str
     title: str
     message: str
-    channel: str = "email"
 
-    @field_validator("title", "message")
+    @field_validator("title", "message", "type")
     @classmethod
     def text_required(cls, value):
         value = value.strip()
-        if value == "":
+        if not value:
             raise ValueError("This field is required")
         return value
 
-    @field_validator("channel")
-    @classmethod
-    def valid_channel(cls, value):
-        channel = value.strip().lower()
-        if channel not in ["email", "sms", "push"]:
-            raise ValueError("Channel must be email, sms, or push")
-        return channel
-
-
 class NotificationResponse(BaseModel):
+    """Schema for notification response - Stage 1"""
     id: int
-    user_id: int
+    student_id: int
+    type: str
     title: str
     message: str
-    channel: str
-    status: str
+    is_read: bool
+    created_at: datetime
+
+    class Config:
+        from_attributes = True
+
+class UnreadCountResponse(BaseModel):
+    """Schema for unread count response - Stage 1"""
+    student_id: int
+    unread_count: int
