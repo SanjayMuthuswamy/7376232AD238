@@ -16,6 +16,46 @@ REST API design with 6 endpoints for managing notifications.
 Real-time updates use WebSocket or Server-Sent Events.
 
 ## Stage 2
+
+**Database:** PostgreSQL (Relational)
+
+**Schema:**
+
+```sql
+CREATE TABLE students (
+    id BIGINT PRIMARY KEY,
+    email VARCHAR(150) UNIQUE NOT NULL
+);
+
+CREATE TABLE notifications (
+    id BIGSERIAL PRIMARY KEY,
+    student_id BIGINT NOT NULL REFERENCES students(id),
+    type VARCHAR(30) NOT NULL,
+    title VARCHAR(150) NOT NULL,
+    message TEXT NOT NULL,
+    is_read BOOLEAN DEFAULT false,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE INDEX idx_student_read ON notifications(student_id, is_read);
+```
+
+**Key Queries:**
+
+```sql
+-- Get unread notifications
+SELECT * FROM notifications 
+WHERE student_id = 1042 AND is_read = false 
+ORDER BY created_at DESC;
+
+-- Mark as read
+UPDATE notifications SET is_read = true 
+WHERE id = $1;
+
+-- Unread count
+SELECT COUNT(*) FROM notifications 
+WHERE student_id = $1 AND is_read = false;
+```
 FROM notifications
 WHERE notification_type = 'Placement';
 ```
