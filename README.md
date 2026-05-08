@@ -41,10 +41,3 @@ Copy `.env.example` to `.env` and adjust values as needed.
 ```powershell
 pytest
 ```
-
-## Docker
-
-```powershell
-docker build -t affordmed-api .
-docker run --rm -p 8000:8000 --env-file .env affordmed-api
-```
